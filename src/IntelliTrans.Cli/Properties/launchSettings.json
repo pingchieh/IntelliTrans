@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "IntelliTrans.Cli": {
+      "commandName": "Project",
+      "commandLineArgs": "patch",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}
