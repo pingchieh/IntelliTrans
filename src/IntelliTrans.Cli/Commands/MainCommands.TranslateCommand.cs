@@ -1,5 +1,6 @@
 ﻿using System.ClientModel;
 using System.Reflection;
+// 添加System.Threading.Tasks命名空间支持
 using IntelliTrans.Core;
 using IntelliTrans.Core.Extensions;
 using IntelliTrans.Database.Models;
@@ -20,12 +21,15 @@ internal partial class MainCommands
     /// <param name="apiKey">OpenAI API 的密钥。如果未提供，则从配置中获取。</param>
     /// <param name="model">OpenAI 使用的模型名称。如果未提供，则从配置中获取。</param>
     /// <param name="language">目标语言，默认为简体中文。</param>
+    /// <param name="parallelism">并行处理数量，默认为8。</param>
     /// <returns>一个代表异步操作的任务。</returns>
     public async Task Translate(
+        CancellationToken cancellationToken,
         string? apiUrl = null,
         string? apiKey = null,
         string? model = null,
-        string language = "简体中文"
+        string language = "简体中文",
+        int parallelism = 8
     )
     {
         apiUrl ??=
@@ -41,53 +45,85 @@ internal partial class MainCommands
 
         var originals = _dbContext
             .Originals.Include(o => o.Translations)
-            .Where(o => !o.Translations.Any(t => t.Language == language));
+            .Where(o => !o.Translations.Any(t => t.Language == language))
+            .OrderBy(o => o.Id);
         ChatCompletionOptions chatCompletionOptions = new()
         {
             Temperature = _configuration.GetSection("Openai:Temperature").Get<float>(),
             EndUserId = Assembly.GetExecutingAssembly().GetName().Name,
         };
-        foreach (var original in originals)
+        var skipList = new List<string>();
+        do
         {
-            var messages = CreatePrompt(language, original.Content);
-            var completion = await client.CompleteChatAsync(messages, chatCompletionOptions);
-            string response = completion.Value.Content[0].Text.Trim();
-            if (response.IsNullOrWhiteSpace())
+            if (cancellationToken.IsCancellationRequested)
             {
-                _logger.LogWarning("OpenAI Response is empty.");
-                continue;
+                return;
             }
-            if (!(response.StartsWith("```xml") && response.EndsWith("```")))
-            {
-                _logger.LogWarning("翻译失败：{response}", response);
-                continue;
-            }
-
-            string translation = response.Trim().RegexReplace(@"^```[^\n]*\n([\s\S]*?)```$", "$1");
-
-            if (!translation.IsNullOrWhiteSpace() && IntelliSenseFile.IsValidXml(translation))
-            {
-                _logger.LogInformation(
-                    "翻译成功：\n\t原文：{origion}\n\n\t译文：{translation}",
-                    original.Content,
-                    translation
-                );
-                original.Translations.Add(
-                    new IntelliSenseTranslation()
+            // 并行处理翻译任务
+            await Parallel.ForEachAsync(
+                originals.Where(o => !skipList.Contains(o.Hash)).Take(20 * parallelism),
+                new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = parallelism,
+                    CancellationToken = cancellationToken,
+                },
+                async (original, ct) =>
+                {
+                    if (ct.IsCancellationRequested)
                     {
-                        Content = translation,
-                        OriginalHash = original.Hash,
-                        Language = language,
+                        return;
                     }
-                );
-                await _dbContext.SaveChangesAsync();
-            }
-            else
-            {
-                _logger.LogWarning("翻译失败：{translation}", translation);
-                continue;
-            }
-        }
+                    if (skipList.Contains(original.Hash))
+                    {
+                        return;
+                    }
+
+                    var messages = CreatePrompt(language, original.Content);
+                    var completion = await client.CompleteChatAsync(
+                        messages,
+                        chatCompletionOptions,
+                        ct
+                    );
+                    string response = completion.Value.Content[0].Text.Trim();
+                    if (response.IsNullOrWhiteSpace())
+                    {
+                        _logger.LogWarning("OpenAI Response is empty.");
+                        return;
+                    }
+                    if (!(response.StartsWith("```xml") && response.EndsWith("```")))
+                    {
+                        _logger.LogWarning("翻译失败(输出错误)：{response}", response);
+                        skipList.Add(original.Hash);
+                        return;
+                    }
+
+                    string translation = response.RegexReplace(@"^```[^\n]*\n([\s\S]*?)```$", "$1");
+
+                    if (IntelliSenseFile.IsValidXml(translation))
+                    {
+                        _logger.LogInformation(
+                            "翻译成功：\n\t原文：{origion}\n\n\t译文：{translation}",
+                            original.Content,
+                            translation
+                        );
+                        original.Translations.Add(
+                            new IntelliSenseTranslation()
+                            {
+                                Content = translation,
+                                OriginalHash = original.Hash,
+                                Language = language,
+                            }
+                        );
+                    }
+                    else
+                    {
+                        _logger.LogWarning("翻译失败(Xml格式错误)：{translation}", translation);
+                        skipList.Add(original.Hash);
+                    }
+                }
+            );
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        } while (originals.Count() > skipList.Count);
     }
 
     /// <summary>

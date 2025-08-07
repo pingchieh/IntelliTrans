@@ -365,3 +365,4 @@ FodyWeavers.xsd
 *.db-wal
 *.db-shm
 appsettings.Development.json
+/src/IntelliTrans.Cli/Commands/MainCommands.TestCommands.cs
