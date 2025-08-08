@@ -7,6 +7,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
+Environment.CurrentDirectory = AppDomain.CurrentDomain.BaseDirectory;
+
 var app = Host.CreateDefaultBuilder(args)
     .ConfigureServices(
         (builder, service) =>
