@@ -117,8 +117,21 @@ public class IntelliSenseFile
         return doc;
     }
 
+    /// <summary>
+    /// 将XML文档保存到指定路径
+    /// </summary>
+    /// <param name="savePath">保存XML文档的完整路径。</param>
     public void SaveXml(string savePath)
     {
+        string? dir = Path.GetDirectoryName(savePath);
+        if (dir == null)
+        {
+            return;
+        }
+        if (!Directory.Exists(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
         doc.Save(savePath);
     }
 

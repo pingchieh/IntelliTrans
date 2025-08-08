@@ -48,8 +48,6 @@ internal partial class MainCommands
             contentFilter
         );
 
-        var translations = await _dbContext.Translations.ToListAsync(cancellationToken);
-
         foreach (string dir in includeDirs)
         {
             string[] xmlFiles = Directory.GetFiles(dir, "*.xml", SearchOption.AllDirectories);
@@ -86,20 +84,32 @@ internal partial class MainCommands
                 }
 
                 _logger.LogInformation("Processing {xmlFile}", xmlFile);
+                var hashes = file.GetContentsByTags(
+                        ["summary", "param", "returns", "remarks", "typeparam"]
+                    )
+                    .Where(c => !c.IsNullOrWhiteSpace() && !c.IsRegexMatch(contentFilter))
+                    .Select(c => c.ReplacExtraSpaces("").CalculateMd5())
+                    .Distinct();
+                var translations = await _dbContext
+                    .Translations.Where(t => hashes.Contains(t.OriginalHash))
+                    .ToDictionaryAsync(t => t.OriginalHash, t => t.Content, cancellationToken);
                 var allXmlElements = file.GetXmlElementsByTags(
                     ["summary", "param", "returns", "remarks", "typeparam"]
                 );
 
                 foreach (var xmlElement in allXmlElements)
                 {
-                    var translation = translations.FirstOrDefault(t =>
-                        t.OriginalHash == xmlElement.InnerXml.ReplacExtraSpaces("").CalculateMd5()
-                    );
-                    if (translation == null)
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    string key = xmlElement.InnerXml.ReplacExtraSpaces("").CalculateMd5();
+                    if (!translations.ContainsKey(key))
                     {
                         continue;
                     }
-                    xmlElement.InnerXml = translation.Content;
+                    string translation = translations[key];
+                    xmlElement.InnerXml = translation;
                 }
                 string saveFile = Path.Combine(
                     Path.GetDirectoryName(xmlFile)!,
