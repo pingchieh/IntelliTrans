@@ -47,21 +47,33 @@ internal partial class MainCommands
             savePath,
             contentFilter
         );
-
         foreach (string dir in includeDirs)
         {
             string[] xmlFiles = Directory.GetFiles(dir, "*.xml", SearchOption.AllDirectories);
             foreach (string xmlFile in xmlFiles)
             {
+                string saveFile = Path.Combine(
+                    Path.GetDirectoryName(xmlFile)!,
+                    savePath,
+                    Path.GetFileName(xmlFile)
+                );
                 if (cancellationToken.IsCancellationRequested)
                 {
                     return;
                 }
+                if (File.Exists(saveFile))
+                {
+                    continue;
+                }
                 if (
                     !Environment.IsPrivilegedProcess
-                    && xmlFile.StartsWith(@"C:\Program Files", StringComparison.OrdinalIgnoreCase)
+                    && xmlFile.StartsWith(
+                        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                        StringComparison.OrdinalIgnoreCase
+                    )
                 )
                 {
+                    _logger.LogWarning("当前文件需要管理员权限，已跳过！{xmlFile}", xmlFile);
                     continue;
                 }
                 if (xmlFile.EndsWith(".bak.xml"))
@@ -93,6 +105,10 @@ internal partial class MainCommands
                 var translations = await _dbContext
                     .Translations.Where(t => hashes.Contains(t.OriginalHash))
                     .ToDictionaryAsync(t => t.OriginalHash, t => t.Content, cancellationToken);
+                if (translations.Count == 0)
+                {
+                    continue;
+                }
                 var allXmlElements = file.GetXmlElementsByTags(
                     ["summary", "param", "returns", "remarks", "typeparam"]
                 );
@@ -111,11 +127,6 @@ internal partial class MainCommands
                     string translation = translations[key];
                     xmlElement.InnerXml = translation;
                 }
-                string saveFile = Path.Combine(
-                    Path.GetDirectoryName(xmlFile)!,
-                    savePath,
-                    Path.GetFileName(xmlFile)
-                );
                 file.SaveXml(saveFile);
             }
         }

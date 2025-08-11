@@ -47,6 +47,17 @@ internal partial class MainCommands
 
         await _dbContext.Database.MigrateAsync();
 
+        string scanedListPath = "scaned.list";
+        HashSet<string> scanedSet = new();
+        if (File.Exists(scanedListPath))
+        {
+            scanedSet = [.. await File.ReadAllLinesAsync(scanedListPath)];
+        }
+        else
+        {
+            File.Create(scanedListPath).Dispose();
+        }
+
         foreach (string dir in includeDirs)
         {
             string[] xmlFiles = Directory.GetFiles(dir, "*.xml", SearchOption.AllDirectories);
@@ -55,6 +66,10 @@ internal partial class MainCommands
                 if (cancellationToken.IsCancellationRequested)
                 {
                     return;
+                }
+                if (scanedSet.Contains(xmlFile))
+                {
+                    continue;
                 }
                 if (xmlFile.EndsWith(".bak.xml"))
                 {
@@ -108,6 +123,14 @@ internal partial class MainCommands
                     );
                     await _dbContext.Originals.AddRangeAsync(newContents);
                     await _dbContext.SaveChangesAsync(cancellationToken);
+                }
+                if (scanedSet.Add(xmlFile))
+                {
+                    await File.AppendAllTextAsync(
+                        scanedListPath,
+                        xmlFile + Environment.NewLine,
+                        cancellationToken
+                    );
                 }
             }
         }
