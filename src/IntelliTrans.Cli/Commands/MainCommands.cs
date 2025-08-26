@@ -1,4 +1,5 @@
 ﻿using IntelliTrans.Database;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -19,5 +20,23 @@ internal partial class MainCommands
         _dbContext = dbContext;
         _logger = logger;
         _configuration = configuration;
+    }
+
+    /// <summary>
+    /// 数据库迁移
+    /// </summary>
+    public async Task Migrate(CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Starting database migration...");
+        try
+        {
+            await _dbContext.Database.MigrateAsync(cancellationToken);
+            _logger.LogInformation("Database migration completed successfully.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "An error occurred during database migration.");
+            throw;
+        }
     }
 }

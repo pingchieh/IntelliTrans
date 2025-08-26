@@ -45,8 +45,6 @@ internal partial class MainCommands
             contentFilter
         );
 
-        await _dbContext.Database.MigrateAsync();
-
         string scanedListPath = "scaned.list";
         HashSet<string> scanedSet = new();
         if (File.Exists(scanedListPath))
