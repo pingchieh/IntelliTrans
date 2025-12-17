@@ -82,13 +82,13 @@ internal partial class MainCommands
                 {
                     continue;
                 }
+                _logger.LogInformation("Processing {xmlFile}", xmlFile);
                 var file = IntelliSenseFile.Parse(xmlFile);
                 if (file == null)
                 {
                     continue;
                 }
 
-                _logger.LogInformation("Processing {xmlFile}", xmlFile);
                 var allContents = file.GetContentsByTags(
                         ["summary", "param", "returns", "remarks", "typeparam"]
                     )

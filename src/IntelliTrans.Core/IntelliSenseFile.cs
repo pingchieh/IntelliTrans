@@ -82,6 +82,8 @@ public class IntelliSenseFile
     /// <returns>如果文档是智能感知 XML 文档，则返回 true；否则返回 false。</returns>
     private static bool IsIntellisenseXml(XmlDocument doc)
     {
+        if (doc == null)
+            return false;
         var docNode = FindXmlNote(doc.ChildNodes, "doc");
         if (docNode == null)
         {
@@ -113,7 +115,11 @@ public class IntelliSenseFile
     private XmlDocument LoadXml(string xmlFile)
     {
         XmlDocument doc = new();
-        doc.Load(xmlFile);
+        try
+        {
+            doc.Load(xmlFile);
+        }
+        catch { }
         return doc;
     }
 
