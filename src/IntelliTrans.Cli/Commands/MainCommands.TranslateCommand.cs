@@ -80,12 +80,22 @@ internal partial class MainCommands
                         EndUserId = userid,
                     };
                     var messages = CreatePrompt(language, original.Content);
-                    var completion = await client.CompleteChatAsync(
-                        messages,
-                        chatCompletionOptions,
-                        ct
-                    );
-                    string response = completion.Value.Content[0].Text.Trim();
+                    string response;
+                    try
+                    {
+                        var completion = await client.CompleteChatAsync(
+                            messages,
+                            chatCompletionOptions,
+                            ct
+                        );
+                        response = completion.Value.Content[0].Text.Trim();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "OpenAI API Error.");
+                        skipList.Add(original.Hash);
+                        return;
+                    }
                     if (response.IsNullOrWhiteSpace())
                     {
                         _logger.LogWarning("OpenAI Response is empty.");
