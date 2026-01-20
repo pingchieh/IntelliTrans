@@ -58,6 +58,11 @@ internal partial class MainCommands
 
         foreach (string dir in includeDirs)
         {
+            if (!Directory.Exists(dir))
+            {
+                _logger.LogWarning("目录不存在：{dir}", dir);
+                continue;
+            }
             string[] xmlFiles = Directory.GetFiles(dir, "*.xml", SearchOption.AllDirectories);
             foreach (string xmlFile in xmlFiles)
             {
