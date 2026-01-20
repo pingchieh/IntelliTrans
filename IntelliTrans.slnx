@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="src/IntelliTrans.Cli/IntelliTrans.Cli.csproj" />
+  <Project Path="src/IntelliTrans.Core/IntelliTrans.Core.csproj" />
+  <Project Path="src/IntelliTrans.Database/IntelliTrans.Database.csproj" />
+  <Project Path="src/IntelliTrans.Migrations.Postgres/IntelliTrans.Migrations.Postgres.csproj" />
+  <Project Path="src/IntelliTrans.Migrations.Sqlite/IntelliTrans.Migrations.Sqlite.csproj" />
+</Solution>
