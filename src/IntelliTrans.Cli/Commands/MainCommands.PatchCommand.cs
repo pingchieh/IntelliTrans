@@ -61,7 +61,7 @@ internal partial class MainCommands
                 {
                     return;
                 }
-                if (File.Exists(saveFile))
+                if (File.Exists(saveFile) && saveFile != xmlFile)
                 {
                     continue;
                 }
@@ -94,7 +94,7 @@ internal partial class MainCommands
                 {
                     continue;
                 }
-                if (file.IsTranslated())
+                if (file.IsTranslated() && saveFile == xmlFile)
                 {
                     continue;
                 }
