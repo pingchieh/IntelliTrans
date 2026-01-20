@@ -88,6 +88,10 @@ internal partial class MainCommands
                 {
                     continue;
                 }
+                if (file.IsTranslated())
+                {
+                    continue;
+                }
 
                 var allContents = file.GetContentsByTags([
                         "summary",
@@ -98,6 +102,10 @@ internal partial class MainCommands
                         "exception",
                     ])
                     .Where(c => !c.IsNullOrWhiteSpace() && !c.IsRegexMatch(contentFilter));
+                if (!allContents.Any())
+                {
+                    continue;
+                }
 
                 var contents = allContents
                     .Select(c => new IntelliSenseOriginal()

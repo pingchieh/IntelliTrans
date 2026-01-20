@@ -94,6 +94,10 @@ internal partial class MainCommands
                 {
                     continue;
                 }
+                if (file.IsTranslated())
+                {
+                    continue;
+                }
 
                 _logger.LogInformation("Processing {xmlFile}", xmlFile);
                 var hashes = file.GetContentsByTags([
@@ -107,6 +111,10 @@ internal partial class MainCommands
                     .Where(c => !c.IsNullOrWhiteSpace() && !c.IsRegexMatch(contentFilter))
                     .Select(c => c.ReplacExtraSpaces("").CalculateMd5())
                     .Distinct();
+                if (!hashes.Any())
+                {
+                    continue;
+                }
                 var translations = await _dbContext
                     .Translations.Where(t => hashes.Contains(t.OriginalHash))
                     .ToDictionaryAsync(t => t.OriginalHash, t => t.Content, cancellationToken);

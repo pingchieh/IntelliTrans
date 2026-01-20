@@ -97,6 +97,43 @@ public class IntelliSenseFile
     }
 
     /// <summary>
+    /// 判断文档是否已翻译。如果文档对象为空、未找到相应节点或缺少 "translate" 属性，则返回 false；否则返回 true。
+    /// </summary>
+    public bool IsTranslated()
+    {
+        if (doc == null)
+            return false;
+        var docNode = FindXmlNote(doc.ChildNodes, "doc");
+        if (docNode == null)
+        {
+            return false;
+        }
+        var trans = docNode.Attributes?["translate"];
+        if (trans == null)
+        {
+            return false;
+        }
+        return true;
+    }
+
+    private void WriteTranslateAttribute()
+    {
+        var docNode = FindXmlNote(doc.ChildNodes, "doc");
+        if (docNode == null)
+        {
+            return;
+        }
+        var attr = docNode.Attributes?["translate"];
+        if (attr == null)
+        {
+            attr = doc.CreateAttribute("translate");
+
+            docNode.Attributes?.Append(attr);
+        }
+        attr.Value = DateTime.Now.ToString("yyyyMMdd");
+    }
+
+    /// <summary>
     /// 在XML节点列表中查找指定名称的XML节点。
     /// </summary>
     /// <param name="nodes">要搜索的XML节点列表。</param>
@@ -138,6 +175,11 @@ public class IntelliSenseFile
         {
             Directory.CreateDirectory(dir);
         }
+        if (doc == null)
+        {
+            return;
+        }
+        WriteTranslateAttribute();
         doc.Save(savePath);
     }
 
