@@ -89,9 +89,14 @@ internal partial class MainCommands
                     continue;
                 }
 
-                var allContents = file.GetContentsByTags(
-                        ["summary", "param", "returns", "remarks", "typeparam"]
-                    )
+                var allContents = file.GetContentsByTags([
+                        "summary",
+                        "param",
+                        "returns",
+                        "remarks",
+                        "typeparam",
+                        "exception",
+                    ])
                     .Where(c => !c.IsNullOrWhiteSpace() && !c.IsRegexMatch(contentFilter));
 
                 var contents = allContents
