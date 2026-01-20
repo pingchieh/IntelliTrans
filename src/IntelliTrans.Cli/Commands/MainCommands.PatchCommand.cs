@@ -96,9 +96,14 @@ internal partial class MainCommands
                 }
 
                 _logger.LogInformation("Processing {xmlFile}", xmlFile);
-                var hashes = file.GetContentsByTags(
-                        ["summary", "param", "returns", "remarks", "typeparam"]
-                    )
+                var hashes = file.GetContentsByTags([
+                        "summary",
+                        "param",
+                        "returns",
+                        "remarks",
+                        "typeparam",
+                        "exception",
+                    ])
                     .Where(c => !c.IsNullOrWhiteSpace() && !c.IsRegexMatch(contentFilter))
                     .Select(c => c.ReplacExtraSpaces("").CalculateMd5())
                     .Distinct();
@@ -109,9 +114,14 @@ internal partial class MainCommands
                 {
                     continue;
                 }
-                var allXmlElements = file.GetXmlElementsByTags(
-                    ["summary", "param", "returns", "remarks", "typeparam"]
-                );
+                var allXmlElements = file.GetXmlElementsByTags([
+                    "summary",
+                    "param",
+                    "returns",
+                    "remarks",
+                    "typeparam",
+                    "exception",
+                ]);
 
                 foreach (var xmlElement in allXmlElements)
                 {
