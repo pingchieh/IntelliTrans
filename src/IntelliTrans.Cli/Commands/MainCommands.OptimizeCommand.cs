@@ -1,4 +1,5 @@
 ﻿using System.ClientModel;
+using System.Collections.Concurrent;
 using System.Reflection;
 // 添加System.Threading.Tasks命名空间支持
 using IntelliTrans.Core;
@@ -14,15 +15,9 @@ namespace IntelliTrans.Cli.Commands;
 internal partial class MainCommands
 {
     /// <summary>
-    /// 使用 OpenAI API 将 IntelliSense 文件的原文内容翻译成指定语言。
+    /// 优化指定语言的译文
     /// </summary>
-    /// <param name="apiUrl">OpenAI API 的 URL。如果未提供，则从配置中获取。</param>
-    /// <param name="apiKey">OpenAI API 的密钥。如果未提供，则从配置中获取。</param>
-    /// <param name="model">OpenAI 使用的模型名称。如果未提供，则从配置中获取。</param>
-    /// <param name="language">目标语言，默认为简体中文。</param>
-    /// <param name="parallelism">并行处理数量，默认为8。</param>
-    /// <returns>一个代表异步操作的任务。</returns>
-    public async Task Translate(
+    public async Task Optimize(
         CancellationToken cancellationToken,
         string? apiUrl = null,
         string? apiKey = null,
@@ -46,10 +41,10 @@ internal partial class MainCommands
 
         var originals = _dbContext
             .Originals.Include(o => o.Translations)
-            .Where(o => !o.Translations.Any(t => t.Language == language))
+            .Where(o => o.Translations.Any(t => t.Language == language && !t.IsOptimized))
             .OrderBy(o => o.Id);
 
-        var skipList = new List<string>();
+        var skipList = new ConcurrentBag<string>();
         do
         {
             if (cancellationToken.IsCancellationRequested)
@@ -58,7 +53,17 @@ internal partial class MainCommands
             }
             // 并行处理翻译任务
             await Parallel.ForEachAsync(
-                originals.Where(o => !skipList.Contains(o.Hash)).Take(20 * parallelism),
+                originals
+                    .Where(o => !skipList.Contains(o.Hash))
+                    .Take(20 * parallelism)
+                    .Select(o => new
+                    {
+                        o.Hash,
+                        o.Content,
+                        Translation = o.Translations.First(t =>
+                            t.Language == language && !t.IsOptimized
+                        ),
+                    }),
                 new ParallelOptions
                 {
                     MaxDegreeOfParallelism = parallelism,
@@ -74,12 +79,17 @@ internal partial class MainCommands
                     {
                         return;
                     }
+                    var translation = original.Translation;
                     ChatCompletionOptions chatCompletionOptions = new()
                     {
                         Temperature = temperature,
                         EndUserId = userid,
                     };
-                    var messages = CreateTranslatePrompt(language, original.Content);
+                    var messages = CreateOptimizePrompt(
+                        language,
+                        original.Content,
+                        translation.Content
+                    );
                     string response;
                     try
                     {
@@ -99,36 +109,36 @@ internal partial class MainCommands
                     if (response.IsNullOrWhiteSpace())
                     {
                         _logger.LogWarning("OpenAI Response is empty.");
+                        skipList.Add(original.Hash);
                         return;
                     }
                     if (!(response.StartsWith("```xml") && response.EndsWith("```")))
                     {
-                        _logger.LogWarning("翻译失败(输出错误)：{response}", response);
+                        _logger.LogWarning("优化翻译失败(输出错误)：{response}", response);
                         skipList.Add(original.Hash);
                         return;
                     }
 
-                    string translation = response.RegexReplace(@"^```[^\n]*\n([\s\S]*?)```$", "$1");
+                    string translationText = response.RegexReplace(
+                        @"^```[^\n]*\n([\s\S]*?)```$",
+                        "$1"
+                    );
 
-                    if (IntelliSenseFile.IsValidXml(translation))
+                    if (IntelliSenseFile.IsValidXml(translationText))
                     {
                         _logger.LogInformation(
-                            "翻译成功：\n\t原文：{origion}\n\n\t译文：{translation}",
+                            "优化翻译成功：\n\t原文：{origion}\n\n\t原始译文：{originalTranslation}\n\n\t优化译文：{translation}",
                             original.Content,
-                            translation
+                            translation.Content,
+                            translationText
                         );
-                        original.Translations.Add(
-                            new IntelliSenseTranslation()
-                            {
-                                Content = translation,
-                                OriginalHash = original.Hash,
-                                Language = language,
-                            }
-                        );
+                        translation.Content = translationText;
+                        translation.IsOptimized = true;
+                        translation.UpdatedAt = DateTime.UtcNow;
                     }
                     else
                     {
-                        _logger.LogWarning("翻译失败(Xml格式错误)：{translation}", translation);
+                        _logger.LogWarning("翻译失败(Xml格式错误)：{translation}", translationText);
                         skipList.Add(original.Hash);
                     }
                 }
@@ -138,72 +148,75 @@ internal partial class MainCommands
     }
 
     /// <summary>
-    /// 创建一个提示消息列表，用于将Microsoft .NET SDK IntelliSense的文档翻译为指定语言。
+    /// 创建用于优化提示的聊天消息列表。根据指定的目标语言、原始 XML 文本和初始翻译文本，生成系统消息和用户消息，以指导翻译编辑器进行优化。
     /// </summary>
-    /// <param name="language">目标语言。</param>
-    /// <param name="originalText">需要翻译的原始文本。</param>
-    /// <returns>包含提示消息的ChatMessage列表。</returns>
-    private static List<ChatMessage> CreateTranslatePrompt(string language, string originalText)
+    /// <param name="language">目标语言的名称，例如 "中文"、"日语" 等。</param>
+    /// <param name="originalText">待翻译的原始 XML 文档片段。</param>
+    /// <param name="translationText">对应的初始翻译 XML 文档片段。</param>
+    /// <returns>包含系统消息和用户消息的 <see cref="List{ChatMessage}"/>，用于后续的翻译质量优化。</returns>
+    private static List<ChatMessage> CreateOptimizePrompt(
+        string language,
+        string originalText,
+        string translationText
+    )
     {
         return
         [
             new SystemChatMessage(
-                $"你是一名专业的.Net软件工程师，你熟悉 C#/.Net 的各种专业术语，现在你需要将Microsoft .NET SDK IntelliSense的文档翻译为{language}。"
+                $"你是一名专业的翻译编辑,精通English和{language}，擅长将技术文档翻译成自然流畅的{language}。"
             ),
             new UserChatMessage(
                 $$"""
-                将以下 XML 内容翻译为{{language}}，确保严格遵循以下要求：
+                下面是Microsoft .NET SDK IntelliSense的XML文档词条的一部分原文和其初始翻译,请根据你的专业知识对翻译进行优化。
 
-                ### 翻译要求：
-                - **目标语言**：{{language}}。
-                - **意义准确**：确保翻译准确传达原文含义，避免任何歧义或误解。
-                - **专业术语**：使用准确的专业术语，确保技术文档的专业性。
+                按照以下要求对翻译进行优化：
 
                 ### 格式要求：
                 - 确保翻译后的 Xml 结构与原文一致，例如标签和属性（如 `<see cref="T:System.Type"/>`）。
                 - 使用`{ }`包裹的内容保持不变。
                 - 使用标签包裹的内容，例如`<c> </c>`包裹的内容保持不变。
 
-                ### 输入结构：
-                - 使用Markdown的代码块包裹起来的Xml字符串。
+                ### 步骤：
+                1. 仔细阅读原文和初始翻译，确认翻译的语义与原文一致。
+                2. 翻译文本的遣词造句要专业流畅,没有机翻的生硬感。
+                3. 确保翻译后的文本格式正确,符合上面的格式要求。
+                4. 以上步骤可重复多次，直到翻译质量达到最佳。
 
-                ### 输出结构：
-                - 将翻译的结果使用Markdown的代码块包裹起来。
-
-                ### 翻译步骤：
-                1. 仔细阅读原文，理解文本的上下文和技术含义。
-                2. 仅翻译 XML 标签之间的文本内容，保持标签和属性不变。
-                3. 确保翻译后的文本流畅、准确，符合{{language}}表达习惯。
-                4. 确保翻译后的文本符合Xml规范，不会引发错误。
-                5. 仅输出用代码块包裹翻译结果，不要添加任何其它内容。
-
-                ### 示例输入1：
+                ### 输出要求：
+                将优化后的翻译放在xml代码块中，不包含其它内容。
+                """
+            ),
+            new UserChatMessage(
+                """
+                原文：
                 ```xml
-                The <see cref="T:System.Type"/> that indicates where this operation is used.
+                Converts instances of <see cref="T:System.Windows.Input.InputScopeName" /> to and from other data types.
                 ```
 
-                ### 示例输出1：
+                初始翻译：
                 ```xml
-                指示此操作所使用的<see cref="T:System.Type"/>。
+                将<see cref="T:System.Windows.Input.InputScopeName" />的实例转换为其他数据类型，或将其他数据类型转换为其实例。
+                ```
+                """
+            ),
+            new AssistantChatMessage(
+                """
+                ```xml
+                在<see cref="T:System.Windows.Input.InputScopeName" />实例与其他数据类型之间进行双向转换。
+                ```
+                """
+            ),
+            new UserChatMessage(
+                $"""
+                原文：
+                ```xml
+                {originalText}
                 ```
 
-                ### 示例输入2：
+                初始翻译：
                 ```xml
-                The entity type '{entityType}' is mapped to the 'DbFunction' named '{functionName}' with return type '{returnType}'. Ensure that the mapped function returns 'IQueryable&lt;{clrType}&gt;'
+                {translationText}
                 ```
-
-                ### 示例输出2：
-                ```xml
-                实体类型'{entityType}'被映射到名为'{functionName}'的'DbFunction'，返回类型为'{returnType}'。请确保映射的函数返回'IQueryable&lt;{clrType}&gt;'
-                ```
-
-                ### 输入：
-
-                ```xml
-                {{originalText}}
-                ```
-
-                ### 输出：
                 """
             ),
         ];

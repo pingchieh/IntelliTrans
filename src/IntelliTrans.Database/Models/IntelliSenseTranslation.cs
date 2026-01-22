@@ -16,6 +16,8 @@ public class IntelliSenseTranslation
     [MaxLength(50)]
     public required string Language { get; set; }
 
+    public bool IsOptimized { get; set; } = false;
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
