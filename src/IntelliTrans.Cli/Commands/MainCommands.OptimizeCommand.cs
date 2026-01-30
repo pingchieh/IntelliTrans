@@ -38,32 +38,35 @@ internal partial class MainCommands
             credential: new ApiKeyCredential(apiKey),
             options: new OpenAIClientOptions { Endpoint = new Uri(apiUrl) }
         );
-
-        var originals = _dbContext
-            .Originals.Include(o => o.Translations)
-            .Where(o => o.Translations.Any(t => t.Language == language && !t.IsOptimized))
-            .OrderBy(o => o.Id);
-
-        var skipList = new ConcurrentBag<string>();
-        do
+        int lastid = 0;
+        while (!cancellationToken.IsCancellationRequested)
         {
-            if (cancellationToken.IsCancellationRequested)
+            var originals = _dbContext
+                .Originals.Include(o => o.Translations)
+                .Where(o =>
+                    o.Id > lastid
+                    && o.Translations.Any(t => t.Language == language && !t.IsOptimized)
+                )
+                .OrderBy(o => o.Id)
+                .Take(20 * parallelism)
+                .Select(o => new
+                {
+                    o.Hash,
+                    o.Content,
+                    Translation = o.Translations.First(t =>
+                        t.Language == language && !t.IsOptimized
+                    ),
+                    o.Id,
+                })
+                .ToList();
+            if (originals.Count == 0)
             {
                 return;
             }
+            lastid = originals.Last().Id;
             // 并行处理翻译任务
             await Parallel.ForEachAsync(
-                originals
-                    .Where(o => !skipList.Contains(o.Hash))
-                    .Take(20 * parallelism)
-                    .Select(o => new
-                    {
-                        o.Hash,
-                        o.Content,
-                        Translation = o.Translations.First(t =>
-                            t.Language == language && !t.IsOptimized
-                        ),
-                    }),
+                originals,
                 new ParallelOptions
                 {
                     MaxDegreeOfParallelism = parallelism,
@@ -72,10 +75,6 @@ internal partial class MainCommands
                 async (original, ct) =>
                 {
                     if (ct.IsCancellationRequested)
-                    {
-                        return;
-                    }
-                    if (skipList.Contains(original.Hash))
                     {
                         return;
                     }
@@ -103,19 +102,16 @@ internal partial class MainCommands
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "OpenAI API Error.");
-                        skipList.Add(original.Hash);
                         return;
                     }
                     if (response.IsNullOrWhiteSpace())
                     {
                         _logger.LogWarning("OpenAI Response is empty.");
-                        skipList.Add(original.Hash);
                         return;
                     }
                     if (!(response.StartsWith("```xml") && response.EndsWith("```")))
                     {
                         _logger.LogWarning("优化翻译失败(输出错误)：{response}", response);
-                        skipList.Add(original.Hash);
                         return;
                     }
 
@@ -139,12 +135,13 @@ internal partial class MainCommands
                     else
                     {
                         _logger.LogWarning("翻译失败(Xml格式错误)：{translation}", translationText);
-                        skipList.Add(original.Hash);
                     }
                 }
             );
+            var translations = originals.Select(o => o.Translation);
+            _dbContext.UpdateRange(translations);
             await _dbContext.SaveChangesAsync(cancellationToken);
-        } while (originals.Count() > skipList.Count);
+        }
     }
 
     /// <summary>

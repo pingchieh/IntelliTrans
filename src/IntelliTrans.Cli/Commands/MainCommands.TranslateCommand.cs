@@ -43,22 +43,23 @@ internal partial class MainCommands
             credential: new ApiKeyCredential(apiKey),
             options: new OpenAIClientOptions { Endpoint = new Uri(apiUrl) }
         );
-
-        var originals = _dbContext
-            .Originals.Include(o => o.Translations)
-            .Where(o => !o.Translations.Any(t => t.Language == language))
-            .OrderBy(o => o.Id);
-
-        var skipList = new List<string>();
-        do
+        int lastid = 0;
+        while (!cancellationToken.IsCancellationRequested)
         {
-            if (cancellationToken.IsCancellationRequested)
+            var originals = await _dbContext
+                .Originals.Include(o => o.Translations)
+                .Where(o => o.Id > lastid && !o.Translations.Any(t => t.Language == language))
+                .OrderBy(o => o.Id)
+                .Take(20 * parallelism)
+                .ToListAsync();
+            if (originals.Count == 0)
             {
-                return;
+                break;
             }
+            lastid = originals.Last().Id;
             // 并行处理翻译任务
             await Parallel.ForEachAsync(
-                originals.Where(o => !skipList.Contains(o.Hash)).Take(20 * parallelism),
+                originals,
                 new ParallelOptions
                 {
                     MaxDegreeOfParallelism = parallelism,
@@ -67,10 +68,6 @@ internal partial class MainCommands
                 async (original, ct) =>
                 {
                     if (ct.IsCancellationRequested)
-                    {
-                        return;
-                    }
-                    if (skipList.Contains(original.Hash))
                     {
                         return;
                     }
@@ -93,7 +90,6 @@ internal partial class MainCommands
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "OpenAI API Error.");
-                        skipList.Add(original.Hash);
                         return;
                     }
                     if (response.IsNullOrWhiteSpace())
@@ -104,7 +100,6 @@ internal partial class MainCommands
                     if (!(response.StartsWith("```xml") && response.EndsWith("```")))
                     {
                         _logger.LogWarning("翻译失败(输出错误)：{response}", response);
-                        skipList.Add(original.Hash);
                         return;
                     }
 
@@ -129,12 +124,12 @@ internal partial class MainCommands
                     else
                     {
                         _logger.LogWarning("翻译失败(Xml格式错误)：{translation}", translation);
-                        skipList.Add(original.Hash);
                     }
                 }
             );
+            _dbContext.UpdateRange(originals);
             await _dbContext.SaveChangesAsync(cancellationToken);
-        } while (originals.Count() > skipList.Count);
+        }
     }
 
     /// <summary>
