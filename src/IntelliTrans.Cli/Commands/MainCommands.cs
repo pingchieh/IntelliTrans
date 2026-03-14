@@ -31,9 +31,9 @@ internal partial class MainCommands
         _logger.LogInformation("Starting database migration...");
         try
         {
-            var scope = _scopeFactory.CreateScope();
-            var _dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
-            await _dbContext.Database.MigrateAsync(cancellationToken);
+            using var scope = _scopeFactory.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
+            await dbContext.Database.MigrateAsync(cancellationToken);
             _logger.LogInformation("Database migration completed successfully.");
         }
         catch (Exception ex)

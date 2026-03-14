@@ -122,9 +122,9 @@ internal partial class MainCommands
                 {
                     continue;
                 }
-                var scope = _scopeFactory.CreateScope();
-                var _dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
-                var translations = await _dbContext
+                using var scope = _scopeFactory.CreateScope();
+                var dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
+                var translations = await dbContext
                     .Translations.Where(t => hashes.Contains(t.OriginalHash))
                     .ToDictionaryAsync(t => t.OriginalHash, t => t.Content, cancellationToken);
                 if (translations.Count == 0)

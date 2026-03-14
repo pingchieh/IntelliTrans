@@ -122,10 +122,10 @@ internal partial class MainCommands
                     })
                     .DistinctBy(o => o.Hash)
                     .ToArray();
-                var scope = _scopeFactory.CreateScope();
-                var _dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
+                using var scope = _scopeFactory.CreateScope();
+                var dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
                 // 一次性查询所有已存在的哈希值
-                var existingHashes = await _dbContext
+                var existingHashes = await dbContext
                     .Originals.Where(o => contents.Select(c => c.Hash).Contains(o.Hash))
                     .Select(o => o.Hash)
                     .ToListAsync(cancellationToken);
@@ -140,8 +140,8 @@ internal partial class MainCommands
                         newContents.Length,
                         xmlFile
                     );
-                    await _dbContext.Originals.AddRangeAsync(newContents);
-                    await _dbContext.SaveChangesAsync(cancellationToken);
+                    await dbContext.Originals.AddRangeAsync(newContents);
+                    await dbContext.SaveChangesAsync(cancellationToken);
                 }
                 if (scanedSet.Add(xmlFile))
                 {

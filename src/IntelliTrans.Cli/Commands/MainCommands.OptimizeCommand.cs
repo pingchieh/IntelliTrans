@@ -43,9 +43,9 @@ internal partial class MainCommands
         int lastid = 0;
         while (!cancellationToken.IsCancellationRequested)
         {
-            var scope = _scopeFactory.CreateScope();
-            var _dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
-            var originals = _dbContext
+            using var scope = _scopeFactory.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
+            var originals = dbContext
                 .Originals.Include(o => o.Translations)
                 .Where(o =>
                     o.Id > lastid
@@ -143,8 +143,8 @@ internal partial class MainCommands
                 }
             );
             var translations = originals.Select(o => o.Translation);
-            _dbContext.UpdateRange(translations);
-            await _dbContext.SaveChangesAsync(cancellationToken);
+            dbContext.UpdateRange(translations);
+            await dbContext.SaveChangesAsync(cancellationToken);
         }
     }
 
