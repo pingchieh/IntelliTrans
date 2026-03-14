@@ -1,8 +1,10 @@
 ﻿using IntelliTrans.Core;
 using IntelliTrans.Core.Extensions;
+using IntelliTrans.Database;
 using IntelliTrans.Database.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace IntelliTrans.Cli.Commands;
@@ -120,7 +122,8 @@ internal partial class MainCommands
                     })
                     .DistinctBy(o => o.Hash)
                     .ToArray();
-
+                var scope = _scopeFactory.CreateScope();
+                var _dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
                 // 一次性查询所有已存在的哈希值
                 var existingHashes = await _dbContext
                     .Originals.Where(o => contents.Select(c => c.Hash).Contains(o.Hash))

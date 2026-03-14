@@ -1,23 +1,24 @@
 ﻿using IntelliTrans.Database;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace IntelliTrans.Cli.Commands;
 
 internal partial class MainCommands
 {
-    private readonly IntelliSenseDbContext _dbContext;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<MainCommands> _logger;
     private readonly IConfiguration _configuration;
 
     public MainCommands(
-        IntelliSenseDbContext dbContext,
+        IServiceScopeFactory scopeFactory,
         ILogger<MainCommands> logger,
         IConfiguration configuration
     )
     {
-        _dbContext = dbContext;
+        _scopeFactory = scopeFactory;
         _logger = logger;
         _configuration = configuration;
     }
@@ -30,6 +31,8 @@ internal partial class MainCommands
         _logger.LogInformation("Starting database migration...");
         try
         {
+            var scope = _scopeFactory.CreateScope();
+            var _dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
             await _dbContext.Database.MigrateAsync(cancellationToken);
             _logger.LogInformation("Database migration completed successfully.");
         }

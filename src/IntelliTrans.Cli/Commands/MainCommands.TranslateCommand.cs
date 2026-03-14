@@ -3,8 +3,10 @@ using System.Reflection;
 // 添加System.Threading.Tasks命名空间支持
 using IntelliTrans.Core;
 using IntelliTrans.Core.Extensions;
+using IntelliTrans.Database;
 using IntelliTrans.Database.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenAI;
 using OpenAI.Chat;
@@ -46,6 +48,8 @@ internal partial class MainCommands
         int lastid = 0;
         while (!cancellationToken.IsCancellationRequested)
         {
+            var scope = _scopeFactory.CreateScope();
+            var _dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
             var originals = await _dbContext
                 .Originals.Include(o => o.Translations)
                 .Where(o => o.Id > lastid && !o.Translations.Any(t => t.Language == language))

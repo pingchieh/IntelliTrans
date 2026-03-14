@@ -1,7 +1,9 @@
 ﻿using IntelliTrans.Core;
 using IntelliTrans.Core.Extensions;
+using IntelliTrans.Database;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace IntelliTrans.Cli.Commands;
@@ -120,6 +122,8 @@ internal partial class MainCommands
                 {
                     continue;
                 }
+                var scope = _scopeFactory.CreateScope();
+                var _dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
                 var translations = await _dbContext
                     .Translations.Where(t => hashes.Contains(t.OriginalHash))
                     .ToDictionaryAsync(t => t.OriginalHash, t => t.Content, cancellationToken);
