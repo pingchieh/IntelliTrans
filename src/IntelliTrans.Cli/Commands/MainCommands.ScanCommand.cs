@@ -15,40 +15,17 @@ internal partial class MainCommands
     /// 扫描IntelliSense文件，包括指定目录中的 XML 文件，并将其内容添加到数据库中。
     /// </summary>
     /// <param name="cancellationToken">取消操作的令牌。</param>
-    /// <param name="includeDirs">包含 XML 文件的目录数组，默认为从配置中读取的 "IntelliSense:IncludeDirs" 节。</param>
-    /// <param name="excludeFiles">要排除的 XML 文件名数组，默认为从配置中读取的 "IntelliSense:ExcludeFiles" 节。</param>
     /// <param name="skipNoDll">指示是否跳过缺少对应 DLL 文件的 XML 文件，默认为 true。</param>
     /// <param name="contentFilter">用于过滤内容的正则表达式，默认为过滤所有包含中文字符的内容。</param>
     /// <returns>一个表示异步加载操作的任务。</returns>
     public async Task Scan(
         CancellationToken cancellationToken,
-        string[]? includeDirs = null,
-        string[]? excludeFiles = null,
         bool skipNoDll = true,
         string contentFilter = @"[\u4e00-\u9fa5]"
     )
     {
-        includeDirs ??=
-            _configuration.GetSection("IntelliSense:IncludeDirs").Get<string[]>()
-            ?? throw new ArgumentNullException(nameof(includeDirs));
-        excludeFiles ??=
-            _configuration.GetSection("IntelliSense:ExcludeFiles").Get<string[]>() ?? [];
-        _logger.LogInformation(
-            """
-            Scan IntelliSense Files:
-                --includeDirs:  {includeDirs}
-                --excludeFiles: {excludeFiles}
-                --skipNoDll:    {skipNoDll}
-                --contentFilter:  {contentFilter}
-            """,
-            includeDirs,
-            excludeFiles,
-            skipNoDll,
-            contentFilter
-        );
-
         string scanedListPath = "scaned.list";
-        HashSet<string> scanedSet = new();
+        HashSet<string> scanedSet = [];
         if (File.Exists(scanedListPath))
         {
             scanedSet = [.. await File.ReadAllLinesAsync(scanedListPath)];
@@ -57,6 +34,33 @@ internal partial class MainCommands
         {
             File.Create(scanedListPath).Dispose();
         }
+        var excludeFiles =
+            _configuration.GetSection("IntelliSense:ExcludeFiles").Get<string[]>() ?? [];
+        List<string> includeDirs = [_configuration["IntelliSense:PacksDir"]!];
+        var nugetDir = _configuration["IntelliSense:NugetDir"];
+        if (!string.IsNullOrEmpty(nugetDir))
+        {
+            includeDirs.AddRange(
+                _configuration
+                    .GetSection("IntelliSense:IncludePackages")
+                    .Get<string[]>()
+                    ?.Select(d => Path.Combine(nugetDir, d))
+                    .ToList()!
+            );
+        }
+        _logger.LogInformation(
+            """
+            Scan IntelliSense Files:
+                --skipNoDll:    {skipNoDll}
+                --contentFilter:  {contentFilter}
+                --includeDirs:  {includeDirs}
+                --excludeFiles: {excludeFiles}
+            """,
+            skipNoDll,
+            contentFilter,
+            includeDirs,
+            excludeFiles
+        );
 
         foreach (string dir in includeDirs)
         {

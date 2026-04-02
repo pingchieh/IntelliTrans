@@ -14,26 +14,31 @@ internal partial class MainCommands
     /// 对IntelliSense文件进行修补，使用数据库中的翻译更新XML文档。
     /// </summary>
     /// <param name="cancellationToken">取消操作的标记。</param>
-    /// <param name="includeDirs">包含XML文件的目录数组。默认为配置文件中的 "IntelliSense:IncludeDirs"。</param>
-    /// <param name="excludeFiles">要排除的XML文件名数组。默认为配置文件中的 "IntelliSense:ExcludeFiles"。</param>
     /// <param name="skipNoDll">如果为true，则跳过没有对应DLL文件的XML文件。默认为true。</param>
     /// <param name="savePath">保存已修补XML文件的路径。默认为 "zh-Hans"。</param>
     /// <param name="contentFilter">用于过滤内容的正则表达式。默认为 @"[\u4e00-\u9fa5]"，匹配所有中文字符。</param>
     /// <returns>一个表示异步操作的任务。</returns>
     public async Task Patch(
         CancellationToken cancellationToken,
-        string[]? includeDirs = null,
-        string[]? excludeFiles = null,
         bool skipNoDll = true,
         string savePath = "zh-Hans",
         string contentFilter = @"[\u4e00-\u9fa5]"
     )
     {
-        includeDirs ??=
-            _configuration.GetSection("IntelliSense:IncludeDirs").Get<string[]>()
-            ?? throw new ArgumentNullException(nameof(includeDirs));
-        excludeFiles ??=
+        var excludeFiles =
             _configuration.GetSection("IntelliSense:ExcludeFiles").Get<string[]>() ?? [];
+        List<string> includeDirs = [_configuration["IntelliSense:PacksDir"]!];
+        var nugetDir = _configuration["IntelliSense:NugetDir"];
+        if (!string.IsNullOrEmpty(nugetDir))
+        {
+            includeDirs.AddRange(
+                _configuration
+                    .GetSection("IntelliSense:IncludePackages")
+                    .Get<string[]>()
+                    ?.Select(d => Path.Combine(nugetDir, d))
+                    .ToList()!
+            );
+        }
         _logger.LogInformation(
             """
             Patch IntelliSense Files:

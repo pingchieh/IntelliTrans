@@ -50,12 +50,27 @@ internal partial class MainCommands
         {
             using var scope = _scopeFactory.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
-            var originals = await dbContext
-                .Originals.Include(o => o.Translations)
-                .Where(o => o.Id > lastid && !o.Translations.Any(t => t.Language == language))
-                .OrderBy(o => o.Id)
-                .Take(20 * parallelism)
-                .ToListAsync();
+            List<IntelliSenseOriginal> originals = new();
+            for (int i = 0; i < 3; i++)
+            {
+                try
+                {
+                    originals = await dbContext
+                        .Originals.Include(o => o.Translations)
+                        .Where(o =>
+                            o.Id > lastid && !o.Translations.Any(t => t.Language == language)
+                        )
+                        .OrderBy(o => o.Id)
+                        .Take(20 * parallelism)
+                        .ToListAsync();
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "An error occurred during database query.");
+                }
+            }
+
             if (originals.Count == 0)
             {
                 break;
@@ -132,7 +147,18 @@ internal partial class MainCommands
                 }
             );
             dbContext.UpdateRange(originals);
-            await dbContext.SaveChangesAsync(cancellationToken);
+            for (int i = 0; i < 3; i++)
+            {
+                try
+                {
+                    await dbContext.SaveChangesAsync(cancellationToken);
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "SaveChanges Error.");
+                }
+            }
         }
     }
 

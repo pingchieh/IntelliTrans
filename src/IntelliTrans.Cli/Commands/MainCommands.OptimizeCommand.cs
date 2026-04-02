@@ -45,15 +45,29 @@ internal partial class MainCommands
         {
             using var scope = _scopeFactory.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
-            var originals = dbContext
-                .Originals.Include(o => o.Translations)
-                .Where(o =>
-                    o.Id > lastid
-                    && o.Translations.Any(t => t.Language == language && !t.IsOptimized)
-                )
-                .OrderBy(o => o.Id)
-                .Take(20 * parallelism)
-                .Select(o => new
+            List<IntelliSenseOriginal> list = new();
+            for (int i = 0; i < 3; i++)
+            {
+                try
+                {
+                    list = await dbContext
+                        .Originals.Include(o => o.Translations)
+                        .Where(o =>
+                            o.Id > lastid
+                            && o.Translations.Any(t => t.Language == language && !t.IsOptimized)
+                        )
+                        .OrderBy(o => o.Id)
+                        .Take(20 * parallelism)
+                        .ToListAsync();
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "An error occurred during database query.");
+                }
+            }
+
+            var originals = list.Select(o => new
                 {
                     o.Hash,
                     o.Content,
@@ -144,7 +158,18 @@ internal partial class MainCommands
             );
             var translations = originals.Select(o => o.Translation);
             dbContext.UpdateRange(translations);
-            await dbContext.SaveChangesAsync(cancellationToken);
+            for (int i = 0; i < 3; i++)
+            {
+                try
+                {
+                    await dbContext.SaveChangesAsync(cancellationToken);
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "An error occurred during database update.");
+                }
+            }
         }
     }
 
