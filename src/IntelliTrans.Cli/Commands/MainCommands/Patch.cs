@@ -1,8 +1,7 @@
-﻿using IntelliTrans.Core;
+using IntelliTrans.Core;
 using IntelliTrans.Core.Extensions;
 using IntelliTrans.Database;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -10,14 +9,6 @@ namespace IntelliTrans.Cli.Commands;
 
 internal partial class MainCommands
 {
-    /// <summary>
-    /// 对IntelliSense文件进行修补，使用数据库中的翻译更新XML文档。
-    /// </summary>
-    /// <param name="cancellationToken">取消操作的标记。</param>
-    /// <param name="skipNoDll">如果为true，则跳过没有对应DLL文件的XML文件。默认为true。</param>
-    /// <param name="savePath">保存已修补XML文件的路径。默认为 "zh-Hans"。</param>
-    /// <param name="contentFilter">用于过滤内容的正则表达式。默认为 @"[\u4e00-\u9fa5]"，匹配所有中文字符。</param>
-    /// <returns>一个表示异步操作的任务。</returns>
     public async Task Patch(
         CancellationToken cancellationToken,
         bool skipNoDll = true,
@@ -25,20 +16,7 @@ internal partial class MainCommands
         string contentFilter = @"[\u4e00-\u9fa5]"
     )
     {
-        var excludeFiles =
-            _configuration.GetSection("IntelliSense:ExcludeFiles").Get<string[]>() ?? [];
-        List<string> includeDirs = [_configuration["IntelliSense:PacksDir"]!];
-        var nugetDir = _configuration["IntelliSense:NugetDir"];
-        if (!string.IsNullOrEmpty(nugetDir))
-        {
-            includeDirs.AddRange(
-                _configuration
-                    .GetSection("IntelliSense:IncludePackages")
-                    .Get<string[]>()
-                    ?.Select(d => Path.Combine(nugetDir, d))
-                    .ToList()!
-            );
-        }
+        var options = CreateFileOptions(skipNoDll, contentFilter);
         _logger.LogInformation(
             """
             Patch IntelliSense Files:
@@ -48,19 +26,21 @@ internal partial class MainCommands
                 --savePath:     {savePath}
                 --contentFilter:  {contentFilter}
             """,
-            includeDirs,
-            excludeFiles,
-            skipNoDll,
+            options.IncludeDirs,
+            options.ExcludeFiles,
+            options.SkipNoDll,
             savePath,
-            contentFilter
+            options.ContentFilter
         );
-        foreach (string dir in includeDirs)
+
+        foreach (string dir in options.IncludeDirs)
         {
             if (!Directory.Exists(dir))
             {
                 _logger.LogWarning("目录不存在：{dir}", dir);
                 continue;
             }
+
             string[] xmlFiles = Directory.GetFiles(dir, "*.xml", SearchOption.AllDirectories);
             foreach (string xmlFile in xmlFiles)
             {
@@ -69,14 +49,17 @@ internal partial class MainCommands
                     savePath,
                     Path.GetFileName(xmlFile)
                 );
+
                 if (cancellationToken.IsCancellationRequested)
                 {
                     return;
                 }
+
                 if (File.Exists(saveFile) && saveFile != xmlFile)
                 {
                     continue;
                 }
+
                 if (
                     !Environment.IsPrivilegedProcess
                     && xmlFile.StartsWith(
@@ -88,45 +71,28 @@ internal partial class MainCommands
                     _logger.LogWarning("当前文件需要管理员权限，已跳过！{xmlFile}", xmlFile);
                     continue;
                 }
-                if (xmlFile.EndsWith(".bak.xml"))
+
+                if (ShouldSkipXmlFile(xmlFile, options))
                 {
                     continue;
                 }
 
-                if (skipNoDll && !File.Exists(Path.ChangeExtension(xmlFile, "dll")))
-                {
-                    continue;
-                }
-                if (excludeFiles.Any(x => x.Equals(Path.GetFileName(xmlFile))))
-                {
-                    continue;
-                }
                 var file = IntelliSenseFile.Parse(xmlFile);
-                if (file == null)
-                {
-                    continue;
-                }
-                if (file.IsTranslated() && saveFile == xmlFile)
+                if (file == null || (file.IsTranslated() && saveFile == xmlFile))
                 {
                     continue;
                 }
 
                 _logger.LogInformation("Processing {xmlFile}", xmlFile);
-                var hashes = file.GetContentsByTags([
-                        "summary",
-                        "param",
-                        "returns",
-                        "remarks",
-                        "typeparam",
-                        "exception",
-                    ])
-                    .Where(c => !c.IsNullOrWhiteSpace() && !c.IsRegexMatch(contentFilter))
+                var hashes = file.GetContentsByTags(XmlDocTags)
+                    .Where(c => !c.IsNullOrWhiteSpace() && !c.IsRegexMatch(options.ContentFilter))
                     .Select(c => c.ReplacExtraSpaces("").CalculateMd5())
                     .Distinct();
                 if (!hashes.Any())
                 {
                     continue;
                 }
+
                 using var scope = _scopeFactory.CreateScope();
                 var dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
                 var translations = await dbContext
@@ -136,29 +102,24 @@ internal partial class MainCommands
                 {
                     continue;
                 }
-                var allXmlElements = file.GetXmlElementsByTags([
-                    "summary",
-                    "param",
-                    "returns",
-                    "remarks",
-                    "typeparam",
-                    "exception",
-                ]);
 
+                var allXmlElements = file.GetXmlElementsByTags(XmlDocTags);
                 foreach (var xmlElement in allXmlElements)
                 {
                     if (cancellationToken.IsCancellationRequested)
                     {
                         return;
                     }
+
                     string key = xmlElement.InnerXml.ReplacExtraSpaces("").CalculateMd5();
-                    if (!translations.ContainsKey(key))
+                    if (!translations.TryGetValue(key, out string? translation))
                     {
                         continue;
                     }
-                    string translation = translations[key];
+
                     xmlElement.InnerXml = translation;
                 }
+
                 file.SaveXml(saveFile);
             }
         }

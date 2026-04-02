@@ -1,4 +1,4 @@
-﻿using IntelliTrans.Database;
+using IntelliTrans.Database;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,9 +23,6 @@ internal partial class MainCommands
         _configuration = configuration;
     }
 
-    /// <summary>
-    /// 数据库迁移
-    /// </summary>
     public async Task Migrate(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Starting database migration...");

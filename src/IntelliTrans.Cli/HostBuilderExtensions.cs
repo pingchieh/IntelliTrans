@@ -1,4 +1,4 @@
-﻿using IntelliTrans.Database;
+using IntelliTrans.Database;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,7 +11,7 @@ using OpenTelemetry.Trace;
 
 namespace IntelliTrans.Cli;
 
-public static class Extensions
+public static class HostBuilderExtensions
 {
     public static TBuilder ConfigureDatabase<TBuilder>(this TBuilder builder)
         where TBuilder : IHostApplicationBuilder
@@ -26,6 +26,7 @@ public static class Extensions
                     x => x.MigrationsAssembly(DbType.Sqlite.Assembly)
                 );
             }
+
             if (dbType == DbType.Postgres.Name)
             {
                 options.UseNpgsql(

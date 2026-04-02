@@ -1,7 +1,5 @@
-﻿using System.ClientModel;
-using System.Collections.Concurrent;
+using System.ClientModel;
 using System.Reflection;
-// 添加System.Threading.Tasks命名空间支持
 using IntelliTrans.Core;
 using IntelliTrans.Core.Extensions;
 using IntelliTrans.Database;
@@ -16,10 +14,7 @@ namespace IntelliTrans.Cli.Commands;
 
 internal partial class MainCommands
 {
-    /// <summary>
-    /// 优化指定语言的译文
-    /// </summary>
-    public async Task Optimize(
+    public async Task Translate(
         CancellationToken cancellationToken,
         string? apiUrl = null,
         string? apiKey = null,
@@ -34,27 +29,28 @@ internal partial class MainCommands
         apiKey ??=
             _configuration["Openai:ApiKey"] ?? throw new ArgumentNullException(nameof(apiKey));
         model ??= _configuration["Openai:Model"] ?? throw new ArgumentNullException(nameof(model));
+
         string? userid = Assembly.GetExecutingAssembly().GetName().Name;
         var client = new ChatClient(
             model: model,
             credential: new ApiKeyCredential(apiKey),
             options: new OpenAIClientOptions { Endpoint = new Uri(apiUrl) }
         );
+
         int lastid = 0;
         while (!cancellationToken.IsCancellationRequested)
         {
             using var scope = _scopeFactory.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
-            List<IntelliSenseOriginal> list = new();
+            List<IntelliSenseOriginal> originals = new();
             for (int i = 0; i < 3; i++)
             {
                 try
                 {
-                    list = await dbContext
+                    originals = await dbContext
                         .Originals.Include(o => o.Translations)
                         .Where(o =>
-                            o.Id > lastid
-                            && o.Translations.Any(t => t.Language == language && !t.IsOptimized)
+                            o.Id > lastid && !o.Translations.Any(t => t.Language == language)
                         )
                         .OrderBy(o => o.Id)
                         .Take(20 * parallelism)
@@ -67,22 +63,12 @@ internal partial class MainCommands
                 }
             }
 
-            var originals = list.Select(o => new
-                {
-                    o.Hash,
-                    o.Content,
-                    Translation = o.Translations.First(t =>
-                        t.Language == language && !t.IsOptimized
-                    ),
-                    o.Id,
-                })
-                .ToList();
             if (originals.Count == 0)
             {
-                return;
+                break;
             }
+
             lastid = originals.Last().Id;
-            // 并行处理翻译任务
             await Parallel.ForEachAsync(
                 originals,
                 new ParallelOptions
@@ -96,17 +82,13 @@ internal partial class MainCommands
                     {
                         return;
                     }
-                    var translation = original.Translation;
+
                     ChatCompletionOptions chatCompletionOptions = new()
                     {
                         Temperature = temperature,
                         EndUserId = userid,
                     };
-                    var messages = CreateOptimizePrompt(
-                        language,
-                        original.Content,
-                        translation.Content
-                    );
+                    var messages = CreateTranslatePrompt(language, original.Content);
                     string response;
                     try
                     {
@@ -122,42 +104,48 @@ internal partial class MainCommands
                         _logger.LogError(ex, "OpenAI API Error.");
                         return;
                     }
+
                     if (response.IsNullOrWhiteSpace())
                     {
                         _logger.LogWarning("OpenAI Response is empty.");
                         return;
                     }
+
                     if (!(response.StartsWith("```xml") && response.EndsWith("```")))
                     {
-                        _logger.LogWarning("优化翻译失败(输出错误)：{response}", response);
+                        _logger.LogWarning("翻译失败(输出错误)：{response}", response);
                         return;
                     }
 
-                    string translationText = response.RegexReplace(
+                    string translation = response.RegexReplace(
                         @"^```[^\n]*\n([\s\S]*?)```$",
                         "$1"
                     );
 
-                    if (IntelliSenseFile.IsValidXml(translationText))
+                    if (IntelliSenseFile.IsValidXml(translation))
                     {
                         _logger.LogInformation(
-                            "优化翻译成功：\n\t原文：{origion}\n\n\t原始译文：{originalTranslation}\n\n\t优化译文：{translation}",
+                            "翻译成功：\n\t原文：{origion}\n\n\t译文：{translation}",
                             original.Content,
-                            translation.Content,
-                            translationText
+                            translation
                         );
-                        translation.Content = translationText;
-                        translation.IsOptimized = true;
-                        translation.UpdatedAt = DateTime.UtcNow;
+                        original.Translations.Add(
+                            new IntelliSenseTranslation
+                            {
+                                Content = translation,
+                                OriginalHash = original.Hash,
+                                Language = language,
+                            }
+                        );
                     }
                     else
                     {
-                        _logger.LogWarning("翻译失败(Xml格式错误)：{translation}", translationText);
+                        _logger.LogWarning("翻译失败(Xml格式错误)：{translation}", translation);
                     }
                 }
             );
-            var translations = originals.Select(o => o.Translation);
-            dbContext.UpdateRange(translations);
+
+            dbContext.UpdateRange(originals);
             for (int i = 0; i < 3; i++)
             {
                 try
@@ -167,82 +155,73 @@ internal partial class MainCommands
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "An error occurred during database update.");
+                    _logger.LogError(ex, "SaveChanges Error.");
                 }
             }
         }
     }
 
-    /// <summary>
-    /// 创建用于优化提示的聊天消息列表。根据指定的目标语言、原始 XML 文本和初始翻译文本，生成系统消息和用户消息，以指导翻译编辑器进行优化。
-    /// </summary>
-    /// <param name="language">目标语言的名称，例如 "中文"、"日语" 等。</param>
-    /// <param name="originalText">待翻译的原始 XML 文档片段。</param>
-    /// <param name="translationText">对应的初始翻译 XML 文档片段。</param>
-    /// <returns>包含系统消息和用户消息的 <see cref="List{ChatMessage}"/>，用于后续的翻译质量优化。</returns>
-    private static List<ChatMessage> CreateOptimizePrompt(
-        string language,
-        string originalText,
-        string translationText
-    )
+    private static List<ChatMessage> CreateTranslatePrompt(string language, string originalText)
     {
         return
         [
             new SystemChatMessage(
-                $"你是一名专业的翻译编辑,精通English和{language}，擅长将技术文档翻译成自然流畅的{language}。"
+                $"你是一名专业的.Net软件工程师，你熟悉 C#/.Net 的各种专业术语，现在你需要将Microsoft .NET SDK IntelliSense的文档翻译为{language}。"
             ),
             new UserChatMessage(
                 $$"""
-                下面是Microsoft .NET SDK IntelliSense的XML文档词条的一部分原文和其初始翻译,请根据你的专业知识对翻译进行优化。
+                将以下 XML 内容翻译为{{language}}，确保严格遵循以下要求：
 
-                按照以下要求对翻译进行优化：
+                ### 翻译要求：
+                - **目标语言**：{{language}}。
+                - **意义准确**：确保翻译准确传达原文含义，避免任何歧义或误解。
+                - **专业术语**：使用准确的专业术语，确保技术文档的专业性。
 
                 ### 格式要求：
                 - 确保翻译后的 Xml 结构与原文一致，例如标签和属性（如 `<see cref="T:System.Type"/>`）。
                 - 使用`{ }`包裹的内容保持不变。
                 - 使用标签包裹的内容，例如`<c> </c>`包裹的内容保持不变。
 
-                ### 步骤：
-                1. 仔细阅读原文和初始翻译，确认翻译的语义与原文一致。
-                2. 翻译文本的遣词造句要专业流畅,没有机翻的生硬感。
-                3. 确保翻译后的文本格式正确,符合上面的格式要求。
-                4. 以上步骤可重复多次，直到翻译质量达到最佳。
+                ### 输入结构：
+                - 使用Markdown的代码块包裹起来的Xml字符串。
 
-                ### 输出要求：
-                将优化后的翻译放在xml代码块中，不包含其它内容。
-                """
-            ),
-            new UserChatMessage(
-                """
-                原文：
-                ```xml
-                Converts instances of <see cref="T:System.Windows.Input.InputScopeName" /> to and from other data types.
-                ```
+                ### 输出结构：
+                - 将翻译的结果使用Markdown的代码块包裹起来。
 
-                初始翻译：
+                ### 翻译步骤：
+                1. 仔细阅读原文，理解文本的上下文和技术含义。
+                2. 仅翻译 XML 标签之间的文本内容，保持标签和属性不变。
+                3. 确保翻译后的文本流畅、准确，符合{{language}}表达习惯。
+                4. 确保翻译后的文本符合Xml规范，不会引发错误。
+                5. 仅输出用代码块包裹翻译结果，不要添加任何其它内容。
+
+                ### 示例输入1：
                 ```xml
-                将<see cref="T:System.Windows.Input.InputScopeName" />的实例转换为其他数据类型，或将其他数据类型转换为其实例。
-                ```
-                """
-            ),
-            new AssistantChatMessage(
-                """
-                ```xml
-                在<see cref="T:System.Windows.Input.InputScopeName" />实例与其他数据类型之间进行双向转换。
-                ```
-                """
-            ),
-            new UserChatMessage(
-                $"""
-                原文：
-                ```xml
-                {originalText}
+                The <see cref="T:System.Type"/> that indicates where this operation is used.
                 ```
 
-                初始翻译：
+                ### 示例输出1：
                 ```xml
-                {translationText}
+                指示此操作所使用的<see cref="T:System.Type"/>。
                 ```
+
+                ### 示例输入2：
+                ```xml
+                The entity type '{entityType}' is mapped to the 'DbFunction' named '{functionName}' with return type '{returnType}'. Ensure that the mapped function returns 'IQueryable&lt;{clrType}&gt;'
+                ```
+
+                ### 示例输出2：
+                ```xml
+                实体类型'{entityType}'被映射到名为'{functionName}'的'DbFunction'，返回类型为'{returnType}'。请确保映射的函数返回'IQueryable&lt;{clrType}&gt;'
+                ```
+
+                ### 输入：
+
+                ```xml
+                {{originalText}}
+                ```
+
+                ### 输出：
                 """
             ),
         ];
