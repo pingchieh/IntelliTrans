@@ -30,20 +30,21 @@ internal partial class MainCommands
             _configuration["Openai:ApiKey"] ?? throw new ArgumentNullException(nameof(apiKey));
         model ??= _configuration["Openai:Model"] ?? throw new ArgumentNullException(nameof(model));
 
-        string? userid = Assembly.GetExecutingAssembly().GetName().Name;
+        var userid = Assembly.GetExecutingAssembly().GetName().Name;
         var client = new ChatClient(
             model: model,
             credential: new ApiKeyCredential(apiKey),
             options: new OpenAIClientOptions { Endpoint = new Uri(apiUrl) }
         );
 
-        int lastid = 0;
+        var lastid = 0;
         while (!cancellationToken.IsCancellationRequested)
         {
-            using var scope = _scopeFactory.CreateScope();
-            var dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
-            List<IntelliSenseOriginal> list = new();
-            for (int i = 0; i < 3; i++)
+            using IServiceScope scope = _scopeFactory.CreateScope();
+            IntelliSenseDbContext dbContext =
+                scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
+            List<IntelliSenseOriginal> list = [];
+            for (var i = 0; i < 3; i++)
             {
                 try
                 {
@@ -94,13 +95,13 @@ internal partial class MainCommands
                         return;
                     }
 
-                    var translation = original.Translation;
+                    IntelliSenseTranslation translation = original.Translation;
                     ChatCompletionOptions chatCompletionOptions = new()
                     {
                         Temperature = temperature,
                         EndUserId = userid,
                     };
-                    var messages = CreateOptimizePrompt(
+                    List<ChatMessage> messages = Prompts.CreateOptimizePrompt(
                         language,
                         original.Content,
                         translation.Content
@@ -108,7 +109,7 @@ internal partial class MainCommands
                     string response;
                     try
                     {
-                        var completion = await client.CompleteChatAsync(
+                        ClientResult<ChatCompletion> completion = await client.CompleteChatAsync(
                             messages,
                             chatCompletionOptions,
                             ct
@@ -133,7 +134,7 @@ internal partial class MainCommands
                         return;
                     }
 
-                    string translationText = response.RegexReplace(
+                    var translationText = response.RegexReplace(
                         @"^```[^\n]*\n([\s\S]*?)```$",
                         "$1"
                     );
@@ -157,9 +158,11 @@ internal partial class MainCommands
                 }
             );
 
-            var translations = originals.Select(o => o.Translation);
+            IEnumerable<IntelliSenseTranslation> translations = originals.Select(o =>
+                o.Translation
+            );
             dbContext.UpdateRange(translations);
-            for (int i = 0; i < 3; i++)
+            for (var i = 0; i < 3; i++)
             {
                 try
                 {
@@ -172,73 +175,5 @@ internal partial class MainCommands
                 }
             }
         }
-    }
-
-    private static List<ChatMessage> CreateOptimizePrompt(
-        string language,
-        string originalText,
-        string translationText
-    )
-    {
-        return
-        [
-            new SystemChatMessage(
-                $"你是一名专业的翻译编辑,精通English和{language}，擅长将技术文档翻译成自然流畅的{language}。"
-            ),
-            new UserChatMessage(
-                $$"""
-                下面是Microsoft .NET SDK IntelliSense的XML文档词条的一部分原文和其初始翻译,请根据你的专业知识对翻译进行优化。
-
-                按照以下要求对翻译进行优化：
-
-                ### 格式要求：
-                - 确保翻译后的 Xml 结构与原文一致，例如标签和属性（如 `<see cref="T:System.Type"/>`）。
-                - 使用`{ }`包裹的内容保持不变。
-                - 使用标签包裹的内容，例如`<c> </c>`包裹的内容保持不变。
-
-                ### 步骤：
-                1. 仔细阅读原文和初始翻译，确认翻译的语义与原文一致。
-                2. 翻译文本的遣词造句要专业流畅,没有机翻的生硬感。
-                3. 确保翻译后的文本格式正确,符合上面的格式要求。
-                4. 以上步骤可重复多次，直到翻译质量达到最佳。
-
-                ### 输出要求：
-                将优化后的翻译放在xml代码块中，不包含其它内容。
-                """
-            ),
-            new UserChatMessage(
-                """
-                原文：
-                ```xml
-                Converts instances of <see cref="T:System.Windows.Input.InputScopeName" /> to and from other data types.
-                ```
-
-                初始翻译：
-                ```xml
-                将<see cref="T:System.Windows.Input.InputScopeName" />的实例转换为其他数据类型，或将其他数据类型转换为其实例。
-                ```
-                """
-            ),
-            new AssistantChatMessage(
-                """
-                ```xml
-                在<see cref="T:System.Windows.Input.InputScopeName" />实例与其他数据类型之间进行双向转换。
-                ```
-                """
-            ),
-            new UserChatMessage(
-                $"""
-                原文：
-                ```xml
-                {originalText}
-                ```
-
-                初始翻译：
-                ```xml
-                {translationText}
-                ```
-                """
-            ),
-        ];
     }
 }

@@ -30,20 +30,21 @@ internal partial class MainCommands
             _configuration["Openai:ApiKey"] ?? throw new ArgumentNullException(nameof(apiKey));
         model ??= _configuration["Openai:Model"] ?? throw new ArgumentNullException(nameof(model));
 
-        string? userid = Assembly.GetExecutingAssembly().GetName().Name;
+        var userid = Assembly.GetExecutingAssembly().GetName().Name;
         var client = new ChatClient(
             model: model,
             credential: new ApiKeyCredential(apiKey),
             options: new OpenAIClientOptions { Endpoint = new Uri(apiUrl) }
         );
 
-        int lastid = 0;
+        var lastid = 0;
         while (!cancellationToken.IsCancellationRequested)
         {
-            using var scope = _scopeFactory.CreateScope();
-            var dbContext = scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
-            List<IntelliSenseOriginal> originals = new();
-            for (int i = 0; i < 3; i++)
+            using IServiceScope scope = _scopeFactory.CreateScope();
+            IntelliSenseDbContext dbContext =
+                scope.ServiceProvider.GetRequiredService<IntelliSenseDbContext>();
+            List<IntelliSenseOriginal> originals = [];
+            for (var i = 0; i < 3; i++)
             {
                 try
                 {
@@ -88,11 +89,14 @@ internal partial class MainCommands
                         Temperature = temperature,
                         EndUserId = userid,
                     };
-                    var messages = CreateTranslatePrompt(language, original.Content);
+                    List<ChatMessage> messages = Prompts.CreateTranslatePrompt(
+                        language,
+                        original.Content
+                    );
                     string response;
                     try
                     {
-                        var completion = await client.CompleteChatAsync(
+                        ClientResult<ChatCompletion> completion = await client.CompleteChatAsync(
                             messages,
                             chatCompletionOptions,
                             ct
@@ -117,10 +121,7 @@ internal partial class MainCommands
                         return;
                     }
 
-                    string translation = response.RegexReplace(
-                        @"^```[^\n]*\n([\s\S]*?)```$",
-                        "$1"
-                    );
+                    var translation = response.RegexReplace(@"^```[^\n]*\n([\s\S]*?)```$", "$1");
 
                     if (IntelliSenseFile.IsValidXml(translation))
                     {
@@ -146,7 +147,7 @@ internal partial class MainCommands
             );
 
             dbContext.UpdateRange(originals);
-            for (int i = 0; i < 3; i++)
+            for (var i = 0; i < 3; i++)
             {
                 try
                 {
@@ -159,71 +160,5 @@ internal partial class MainCommands
                 }
             }
         }
-    }
-
-    private static List<ChatMessage> CreateTranslatePrompt(string language, string originalText)
-    {
-        return
-        [
-            new SystemChatMessage(
-                $"你是一名专业的.Net软件工程师，你熟悉 C#/.Net 的各种专业术语，现在你需要将Microsoft .NET SDK IntelliSense的文档翻译为{language}。"
-            ),
-            new UserChatMessage(
-                $$"""
-                将以下 XML 内容翻译为{{language}}，确保严格遵循以下要求：
-
-                ### 翻译要求：
-                - **目标语言**：{{language}}。
-                - **意义准确**：确保翻译准确传达原文含义，避免任何歧义或误解。
-                - **专业术语**：使用准确的专业术语，确保技术文档的专业性。
-
-                ### 格式要求：
-                - 确保翻译后的 Xml 结构与原文一致，例如标签和属性（如 `<see cref="T:System.Type"/>`）。
-                - 使用`{ }`包裹的内容保持不变。
-                - 使用标签包裹的内容，例如`<c> </c>`包裹的内容保持不变。
-
-                ### 输入结构：
-                - 使用Markdown的代码块包裹起来的Xml字符串。
-
-                ### 输出结构：
-                - 将翻译的结果使用Markdown的代码块包裹起来。
-
-                ### 翻译步骤：
-                1. 仔细阅读原文，理解文本的上下文和技术含义。
-                2. 仅翻译 XML 标签之间的文本内容，保持标签和属性不变。
-                3. 确保翻译后的文本流畅、准确，符合{{language}}表达习惯。
-                4. 确保翻译后的文本符合Xml规范，不会引发错误。
-                5. 仅输出用代码块包裹翻译结果，不要添加任何其它内容。
-
-                ### 示例输入1：
-                ```xml
-                The <see cref="T:System.Type"/> that indicates where this operation is used.
-                ```
-
-                ### 示例输出1：
-                ```xml
-                指示此操作所使用的<see cref="T:System.Type"/>。
-                ```
-
-                ### 示例输入2：
-                ```xml
-                The entity type '{entityType}' is mapped to the 'DbFunction' named '{functionName}' with return type '{returnType}'. Ensure that the mapped function returns 'IQueryable&lt;{clrType}&gt;'
-                ```
-
-                ### 示例输出2：
-                ```xml
-                实体类型'{entityType}'被映射到名为'{functionName}'的'DbFunction'，返回类型为'{returnType}'。请确保映射的函数返回'IQueryable&lt;{clrType}&gt;'
-                ```
-
-                ### 输入：
-
-                ```xml
-                {{originalText}}
-                ```
-
-                ### 输出：
-                """
-            ),
-        ];
     }
 }
